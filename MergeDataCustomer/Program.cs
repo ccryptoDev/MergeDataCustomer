@@ -13,6 +13,7 @@ using Microsoft.OpenApi.Models;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text;
+using MergeDataCustomer.Application.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,11 +25,11 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("Layer2", new OpenApiInfo()
+    c.SwaggerDoc("Layer4", new OpenApiInfo()
     {
-        Version = "Layer2",
-        Title = "API MergeDataCustomer - Layer 2",
-        Description = "The layer 2 of MergeData manages his versioning starting with 2 and following with the API version. For example: if 2.1 is the first version, 2.12 could be the next one."
+        Version = "Layer4",
+        Title = "API MergeDataCustomer - Layer 4",
+        Description = "The layer 4 of MergeData manages his versioning starting with 4 and following with the API version. For example: if 4.1 is the first version, 4.12 could be the next one."
     });
 
     c.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
@@ -44,8 +45,8 @@ builder.Services.AddApiVersioning(options => {
 
 builder.Services.AddCors();
 
-//add db
-builder.Services.AddDbContext<RawContext>(/*options => options.UseNpgsql(configuration.GetConnectionString("DevConnection"))*/);
+//reutilize dbContext from MDI layer 1
+builder.Services.AddDbContext<RawContext>();
 
 builder.Services.AddIdentity<User, Role>(options =>
     {
@@ -94,8 +95,16 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddTransient<ITokenService, IdentityService>();
 builder.Services.AddTransient<IAccountService, AccountService>();
+builder.Services.AddScoped<ReportService>();
+
+//own services
+builder.Services.AddScoped<StoreService>();
+builder.Services.AddScoped<GeneralService>();
 
 builder.Services.AddTransient<IMailService, SMTPMailService>();
+
+//add infrastructure mappings
+builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
 
 //swagger auth definitions
 builder.Services.AddSwaggerGen((c) =>
@@ -149,7 +158,7 @@ app.MapControllers();
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
-    options.SwaggerEndpoint("/swagger/Layer2/swagger.json", typeof(Program).Assembly.GetName().Name);
+    options.SwaggerEndpoint("/swagger/Layer4/swagger.json", typeof(Program).Assembly.GetName().Name);
     options.RoutePrefix = "swagger";
     options.DisplayRequestDuration();
 });
