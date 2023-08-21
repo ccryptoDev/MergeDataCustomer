@@ -3,6 +3,6 @@
     public static class ApiVersioning
     {
         //Current version of MergeDataCustomer:
-        public const string CurrentVersion = "2.1";
+        public const string CurrentVersion = "4.1";
     }
 }
