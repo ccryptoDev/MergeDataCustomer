@@ -4,6 +4,7 @@ using MergeDataCustomer.Helpers.Configuration;
 using MergeDataCustomer.Repositories.DtoModels.Requests;
 using MergeDataCustomer.Repositories.DtoModels.Responses;
 using MergeDataEntities.Schemas.Public;
+using MergeDataEntities.Schemas.Reports;
 using MergeDataImporter.Helpers.Generic;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -99,11 +100,19 @@ namespace MergeDataCustomer.Application.Controllers
             var result = new Result<ReportDetailResponse>();
             bool anyPath = false;
 
-            if((request.ByTrend == null || !request.ByTrend.Value) &&
+            Report reportConfig = _reportService.GetReportConfig(request.ReportId, request.ClientId);
+
+            //if the report is "splitted by store", we add all the stores to the request
+            if (reportConfig.SplitByStore && (request.StoreId == null || request.StoreId.Count == 0 || (request.StoreId.Count == 1 && request.StoreId.First() == 0)))
+                request.StoreId = _reportService.GetAllStoreIds(request.ClientId);
+
+
+            if ((request.ByTrend == null || !request.ByTrend.Value) &&
                request.StoreId != null && request.StoreId.Count == 1 &&
-               (((periodsFormat == 1 || periodsFormat == 2) && request.Period.Count == 1) || (periodsFormat == 3 && request.Period.Count == 2))) //one period if yyyy or yyyy-mm format, or 2 periods if ymd format
+               (((periodsFormat == 1 || periodsFormat == 2) && request.Period.Count == 1) || (periodsFormat == 3 && request.Period.Count == 2)) ||
+               reportConfig.SplitByStore) //one period if yyyy or yyyy-mm format, or 2 periods if ymd format
             {
-                if(periodsFormat == 1)
+                if(periodsFormat == 1) //if the period(s) are in YYYY format, we transform them to 12 separated periods in YYYY-MM 
                     request.Period = _reportService.PreparePeriods(request.Period);
 
                 anyPath = true;
@@ -145,12 +154,12 @@ namespace MergeDataCustomer.Application.Controllers
                 return BadRequest(result.Messages);
         }
 
-        [Route("GetReportSummary")]
+        [Route("GetReportSummaries")]
         [Authorize(Policy = Permissions.User.View)]
         [HttpPost]
-        public async Task<IActionResult> GetReportSummary([FromForm] ReportSummaryRequest request)
+        public async Task<IActionResult> GetReportSummaries(int subSectionID)
         {
-            var result = await _reportService.GetReportSummary(request);
+            var result = await _reportService.GetReportSummaries(subSectionID);
 
             return Ok(result);
         }
