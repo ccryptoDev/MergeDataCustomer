@@ -10,7 +10,7 @@ namespace MergeDataCustomer.Application.Mappings
         {
             CreateMap<Report, ReportConfigResponse>().ReverseMap();
             CreateMap<Report, ReportContractResponse>().ReverseMap();
-            CreateMap<Report, ReportSummaryResponse>().ReverseMap();
+            CreateMap<Report, ReportBasicDataResponse>().ReverseMap();
             CreateMap<ReportLine, ReportLineResponse>().ReverseMap();
         }
     }
