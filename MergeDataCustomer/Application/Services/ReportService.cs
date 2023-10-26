@@ -1,17 +1,15 @@
 ﻿using AutoMapper;
 using MergeDataCustomer.Repositories.DtoModels.Requests;
 using MergeDataCustomer.Repositories.DtoModels.Responses;
-using MergeDataEntities.Schemas.Reports;
+using MergeDataEntities.Enums;
 using MergeDataEntities.Schemas.Public;
+using MergeDataEntities.Schemas.Reports;
 using MergeDataImporter.Helpers.Generic;
 using MergeDataImporter.Repositories.Context;
 using MergeDataImporter.Repositories.Contracts;
 using Microsoft.EntityFrameworkCore;
-using Org.BouncyCastle.Asn1.Ocsp;
 using System.Globalization;
-using static MergeDataImporter.Helpers.Generic.Permissions;
 using System.Text.RegularExpressions;
-using MergeDataImporter.Repositories.DtoModels.Requests.Identity;
 
 namespace MergeDataCustomer.Application.Services
 {
@@ -75,7 +73,7 @@ namespace MergeDataCustomer.Application.Services
             return await Result<List<SubSection>>.SuccessAsync(subSections);
         }
 
-        public async Task<Result<List<ReportContractResponse>>> GetReportListBySubSection(long subSectionId, long clientId, string userId)
+        public async Task<Result<List<ReportBasicDataResponse>>> GetReportListBySubSection(long subSectionId, long clientId, string userId)
         {
             List<Report> reports = new List<Report>();
             bool isAdministrator = await UserIsAdministrator(userId);
@@ -90,9 +88,9 @@ namespace MergeDataCustomer.Application.Services
                 reports = _context.Reports.Where(r => r.IsActive && userReports.Contains(r.Id) && r.SubSectionId == subSectionId && r.ClientId == clientId).ToList();
             }
 
-            var defResponse = _mapper.Map<List<ReportContractResponse>>(reports);
+            var defResponse = _mapper.Map<List<ReportBasicDataResponse>>(reports);
 
-            return await Result<List<ReportContractResponse>>.SuccessAsync(defResponse);
+            return await Result<List<ReportBasicDataResponse>>.SuccessAsync(defResponse);
         }
 
         /// <summary>
@@ -111,6 +109,124 @@ namespace MergeDataCustomer.Application.Services
             }
 
             return defPeriods;
+        }
+
+        public Report GetReportConfig(long reportId, long clientId)
+        {
+            var report = _context.Reports.FirstOrDefault(r => r.IsActive && r.Id == reportId && r.ClientId == clientId);
+
+            return report;
+        }
+
+        public List<long> GetAllStoreIds(long clientId)
+        {
+            var listOfStoreIds = _context.Stores.Where(x => x.IsActive && x.ClientId == clientId).Select(x => x.StoreId).ToList();
+
+            return listOfStoreIds;
+        }
+
+        //public async Task<Result<List<ReportDetailResponse>>> GetReportSummaries(int subSectionID)
+        //{
+        //    List<ReportDetailResponse> result = new List<ReportDetailResponse>();
+
+        //    // Mapping of ReportConfigResponse
+        //    ReportConfigResponse rcr = new ReportConfigResponse()
+        //    {
+        //        SummaryStyle = "bubble",
+        //        Columns = new List<string> { "LowerLimit", "UpperLimit", "Count" }
+        //    };
+
+        //    // Simulated DATA (for now)
+        //    var mockData = new List<ReportSummaryItem>
+        //    {
+        //        new ReportSummaryItem { LowerLimit = 0, UpperLimit = 30, Count = 32 },
+        //        new ReportSummaryItem { LowerLimit = 31, UpperLimit = 90, Count = 120 },
+        //        new ReportSummaryItem { LowerLimit = 91, UpperLimit = 180, Count = 32 },
+        //        new ReportSummaryItem { LowerLimit = 181, UpperLimit = 1000, Count = 24 }
+        //    };
+
+        //    // Simulating Report Lines
+        //    var reportLinesResponse = mockData.Select(md => new ReportLineResponse
+        //    {
+        //        Values = new List<string> { md.LowerLimit.ToString(), md.UpperLimit.ToString(), md.Count.ToString() },
+        //        // To set other properties
+        //    }).ToList();
+
+        //    ReportDetailResponse rdr = new ReportDetailResponse()
+        //    {
+        //        ReportConfig = rcr,
+        //        ReportLines = reportLinesResponse
+        //    };
+
+        //    result.Add(rdr);
+
+        //    return await Result<List<ReportDetailResponse>>.SuccessAsync(result);
+        //}
+
+        public async Task<Result<ReportDetailResponse>> GetReportSummaries(int subSectionID)
+        {
+            var today = DateTime.Now;
+
+            // Step 1: Extract data and calculate days in inventory
+            var daysInInventory = _context.ReportLineValues
+                .Where(rlv => rlv.ReportLine.ReportId == 71) //Search the report by name. Should contain word: "Inventory"
+                .Select(rlv => (today - DateTime.ParseExact(rlv.Column3, "M/d/yyyy h:mm:ss tt", CultureInfo.InvariantCulture)).Days)
+                .ToList();
+
+            //// Step 2: Determine ranges. Here, we'll generate ranges in a dinamical way.
+            //var minDay = daysInInventory.Min();
+            //var maxDay = daysInInventory.Max();
+            //var rangeCount = 4; // This is a fixed number for this example, but it could be dynamic.
+            //var step = (maxDay - minDay) / rangeCount;
+
+            //var ranges = Enumerable.Range(0, rangeCount)
+            //    .Select(i => new { Lower = minDay + i * step, Upper = minDay + (i + 1) * step - 1 })
+            //    .ToList();
+
+            // Step 2: Denition of fixed ranges
+            var ranges = new List<(int Lower, int Upper)>
+            {
+                (0, 30),
+                (31, 90),
+                (91, 180),
+                (181, int.MaxValue)  // for "+180"
+            };
+
+            // Step 3: Count records on each range
+            var summaries = ranges.Select(r => new ReportSummaryItem
+            {
+                LowerLimit = r.Lower,
+                UpperLimit = r.Upper,
+                Count = daysInInventory.Count(day => day >= r.Lower && day <= r.Upper)
+            }).ToList();
+
+            // Answer construction
+            var rcr = new ReportConfigResponse()
+            {
+                Style = "bubble",
+                Columns = new List<string> { "LowerLimit", "UpperLimit", "Count" }
+            };
+
+            var reportLinesResponse = summaries.Select(s => new ReportLineResponse
+            {
+                Values = new List<string> { s.LowerLimit.ToString(), s.UpperLimit.ToString(), s.Count.ToString() }
+            }).ToList();
+
+            var rdr = new ReportDetailResponse()
+            {
+                ReportConfig = rcr,
+                ReportLines = reportLinesResponse
+            };
+
+            return await Result<ReportDetailResponse>.SuccessAsync(rdr);
+        }
+
+        // Auxiliar class for Report Summary data
+        private class ReportSummaryItem
+        {
+            public int LowerLimit { get; set; }
+            public int UpperLimit { get; set; }
+            public int Count { get; set; }
         }
 
         public async Task<Result<ReportDetailResponse>> GetReport(GetReportRequest request, bool periodsAreYmd)
@@ -137,39 +253,111 @@ namespace MergeDataCustomer.Application.Services
             var reportLines = _context.ReportLines.Where(rl => rl.IsActive && rl.ReportId == report.Id)
                                                   .OrderBy(rl => rl.Order)
                                                   .ToList();
-            var reportLineValues = _context.ReportLineValues.Where(rlv => request.StoreId.Contains(rlv.StoreId) &&
-                                                                   rlv.IsActive &&
-                                                                   rlv.ReportLine.ReportId == report.Id)
+
+            var reportLineValues = await _context.ReportLineValues.Where(rlv => 
+                                                                   rlv.ReportLine.ReportId == report.Id &&
+                                                                   request.StoreId.Contains(rlv.StoreId.Value) &&
+                                                                   request.Period.Contains(rlv.Period) &&
+                                                                   rlv.IsActive)
+                                                            .ToListAsync();
+
+            if (reportLineValues.Count() == 0) //no data for given period
+            {
+                ReportDetailResponse noDataRdr = new ReportDetailResponse()
+                {
+                    ReportConfig = rcr,
+                    ReportLines = new List<ReportLineResponse>()
+                };
+
+                return await Result<ReportDetailResponse>.SuccessAsync(noDataRdr);
+            }
+
+
+            List<long> storeIds = new List<long>();
+            if (report.ReportType == ReportType.Accounting && report.SplitByStore)
+            {
+                //this is a special case report, so we need to look for the lines without filtering by store
+                reportLineValues = _context.ReportLineValues.Where(rlv =>
+                                                                   rlv.ReportLine.ReportId == report.Id &&
+                                                                   request.Period.Contains(rlv.Period) &&
+                                                                   rlv.IsActive)
                                                             .ToList();
 
-            if(periodsAreYmd)
+                string splitByStoreIds = reportLineValues.First(x => x.SplitByStoreIds != null)?.SplitByStoreIds;
+                storeIds = splitByStoreIds.Split(',').Select(long.Parse).ToList();
+
+                List<Store> storesNeeded = await _context.Stores.Where(s => storeIds.Contains(s.StoreId)).ToListAsync();
+
+                foreach(Store str in storesNeeded)
+                {
+                    for (int i = 1; i <= report.ColumnsUsed; i++)
+                        rcr.Columns.Add((string)report.GetType().GetProperty("Column" + i.ToString()).GetValue(report, null) + " - " + str.AbbrName);
+                }
+            }
+
+
+            if (report.ReportType == ReportType.Repeat) //if the report is repeat, we need to make a copy of the reportLine for each existing reportLineValue
+                for (int z = 0; z < reportLineValues.Count-1; z++)
+                    reportLines.Add(reportLines.ElementAt(0));
+            
+
+            if (periodsAreYmd)
                 reportLineValues = reportLineValues.Where(rlv => rlv.CreatedOn >= periodsYmd[0] && rlv.CreatedOn <= periodsYmd[1]).ToList();
             else
                 reportLineValues = reportLineValues.Where(rlv => request.Period.Contains(rlv.Period)).ToList();
 
-
-            if (reportLineValues.Count == 0)
-                return await Result<ReportDetailResponse>.FailAsync("No data for given period");
-
             List<ReportLineResponse> rlr = _mapper.Map<List<ReportLineResponse>>(reportLines);
             rlr.ForEach(r =>
             {
-                var currentLineValue = reportLineValues.First(rlv => rlv.ReportLineId == r.Id);
-                var currentLine = reportLines.First(rl => rl.Id == r.Id);
-
-                r.StoreId = currentLineValue.StoreId;
-                r.Period = currentLineValue.Period;
-
-                List<string> column_values = new List<string>();
-                List<string> column_formats = new List<string>();
-                for (int i = 1; i <= report.ColumnsUsed; i++)
+                if(r.Style != "Title")
                 {
-                    column_values.Add((string)currentLineValue.GetType().GetProperty("Column" + i.ToString()).GetValue(currentLineValue, null));
-                    column_formats.Add((string)currentLine.GetType().GetProperty("Type" + i.ToString()).GetValue(currentLine, null));
-                }
+                    var currentLineValue = reportLineValues.First(rlv => rlv.ReportLineId == r.Id);
+                    reportLineValues.Remove(currentLineValue); //so in th repeat type report, the next loop will get the next reportLineValue and not the same
+                    var currentLine = reportLines.First(rl => rl.Id == r.Id);
 
-                r.Values = column_values;
-                r.TypeFormats = column_formats;
+                    r.StoreId = currentLineValue.StoreId.Value;
+                    r.Period = currentLineValue.Period;
+
+                    List<string> column_values = new List<string>();
+                    List<string> column_formats = new List<string>();
+
+                    int iAux = 1;
+                    for (int i = 1; i <= report.ColumnsUsed * (storeIds.Count() + 1); i++)
+                    {
+                        
+                        string cellValue = (string)currentLineValue.GetType().GetProperty("Column" + i.ToString()).GetValue(currentLineValue, null);
+                        string cellFormat = (string)currentLine.GetType().GetProperty("Type" + iAux.ToString()).GetValue(currentLine, null);
+
+                        if(cellFormat.Equals("daysToCurrentDate")) //special case cell format
+                        {
+                            cellFormat = "text";
+                            DateTime today = DateTime.Today;
+                            DateTime date = new DateTime();
+                            try { date = Convert.ToDateTime(cellValue); } catch { }
+
+                            if (cellValue == null || cellValue.Equals("") || date == new DateTime(0001, 01, 01))
+                                cellValue = "";
+                            else
+                            {
+                                int daysDiff = Convert.ToInt32((today - date).TotalDays);
+                                if (daysDiff <= 0)
+                                    daysDiff = 1;
+
+                                cellValue = daysDiff.ToString();
+                            }
+                        }
+
+                        column_values.Add(cellValue);
+                        column_formats.Add(cellFormat);
+
+                        if(iAux >= report.ColumnsUsed) //the typeFormats of the cols must be repeated for each repeated column
+                            iAux = 1;
+                        iAux++;
+                    }
+
+                    r.Values = column_values;
+                    r.TypeFormats = column_formats;
+                }
             });
 
             ReportDetailResponse rdr = new ReportDetailResponse()
@@ -212,7 +400,7 @@ namespace MergeDataCustomer.Application.Services
                                                   .ToList();
 
             var firstPart = _context.ReportLineValues
-                                .Where(rlv => request.StoreId.Contains(rlv.StoreId) &&
+                                .Where(rlv => request.StoreId.Contains(rlv.StoreId.Value) &&
                                         request.Period.Contains(rlv.Period) &&
                                         rlv.IsActive &&
                                         rlv.ReportLine.ReportId == report.Id)
@@ -227,7 +415,7 @@ namespace MergeDataCustomer.Application.Services
                                     .AsEnumerable() //to be able to use body statement on Select
                                     .Select(periodGroup => new ReportLineValueAggrByStore
                                     {
-                                        StoreId = periodGroup.First().StoreId,
+                                        StoreId = periodGroup.First().StoreId.Value,
                                         ReportLineId = periodGroup.First().ReportLineId,
                                         ColumnValue = periodGroup.Sum(x => Convert.ToDouble(x.GetType().GetProperty("Column" + report.AggrByColumnIdx).GetValue(x, null))).ToString()
                                     })
@@ -304,7 +492,7 @@ namespace MergeDataCustomer.Application.Services
 
 
             var firstPart = _context.ReportLineValues
-                                .Where(rlv => request.StoreId.Contains(rlv.StoreId) &&
+                                .Where(rlv => request.StoreId.Contains(rlv.StoreId.Value) &&
                                         request.Period.Contains(rlv.Period) &&
                                         rlv.IsActive &&
                                         rlv.ReportLine.ReportId == report.Id)
@@ -350,15 +538,6 @@ namespace MergeDataCustomer.Application.Services
             return await Result<ReportDetailResponse>.SuccessAsync(rdr);
         }
 
-        public async Task<Result<ReportSummaryResponse>> GetReportSummary(ReportSummaryRequest request)
-        {
-            var report = await _context.Reports.FirstOrDefaultAsync(r => r.IsActive && r.Id == request.ReportId && r.ClientId == request.ClientId);
-            if (report == null)
-                return await Result<ReportSummaryResponse>.FailAsync("Report not found");
-
-            return await Result<ReportSummaryResponse>.SuccessAsync(_mapper.Map<ReportSummaryResponse>(report));
-        }
-
         /// <summary>
         /// It generates a hardcoded report structure for the drilldown of a report line or account. Once we have real data we need to adapt this service to work dynamically.
         /// </summary>
@@ -388,7 +567,7 @@ namespace MergeDataCustomer.Application.Services
                         Order = 10+(i*10),
                         Name = "Hardcoded line level 1",
                         TypeFormats = i != 3 ? new List<string>() { "string", "string", "string", "dollar", "dollar", "integer", "integer" } : new List<string>() { "string", "dollar", "string", "integer" },
-                        StoreId = reportLine.StoreId,
+                        StoreId = reportLine.StoreId.Value,
                         Visible = true,
                         Drillable = true,
                         Style = i != 3 ? "" : "final",
