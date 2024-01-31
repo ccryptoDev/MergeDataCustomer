@@ -25,11 +25,11 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("Layer4", new OpenApiInfo()
+    c.SwaggerDoc("Layer3", new OpenApiInfo()
     {
-        Version = "Layer4",
-        Title = "API MergeDataCustomer - Layer 4",
-        Description = "The layer 4 of MergeData manages his versioning starting with 4 and following with the API version. For example: if 4.1 is the first version, 4.12 could be the next one."
+        Version = "Layer3",
+        Title = "API MergeDataCustomer - Layer 3",
+        Description = "The layer 3 of MergeData manages his versioning starting with 3 and following with the API version. For example: if 3.1 is the first version, 3.12 could be the next one."
     });
 
     c.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
@@ -158,7 +158,7 @@ app.MapControllers();
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
-    options.SwaggerEndpoint("/swagger/Layer4/swagger.json", typeof(Program).Assembly.GetName().Name);
+    options.SwaggerEndpoint("/swagger/Layer3/swagger.json", typeof(Program).Assembly.GetName().Name);
     options.RoutePrefix = "swagger";
     options.DisplayRequestDuration();
 });
