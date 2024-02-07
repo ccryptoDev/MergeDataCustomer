@@ -22,10 +22,8 @@ namespace MergeDataCustomer.Application.Services
             SystemDateResponse result = new SystemDateResponse()
             {
                 ClientId = clientId,
-                CurrentDate = DateTime.UtcNow,
                 YearsBackward = clientData.YearsBackward,
-                LastAccUpdate = DateTime.UtcNow,
-                LastFIUpdate = DateTime.UtcNow
+                LastUpdateDate = clientData.LastUpdateDate
             };
 
             return await Result<SystemDateResponse>.SuccessAsync(result);
