@@ -14,7 +14,7 @@ using MergeDataImporter.Repositories.Context;
 namespace MergeDataCustomer.Application.Controllers
 {
     [ApiController]
-    [ApiExplorerSettings(GroupName = "Layer4")]
+    [ApiExplorerSettings(GroupName = "Layer3")]
     [ApiVersion(ApiVersioning.CurrentVersion)]
     [Route("api/identity/[controller]")]
     public class UserController : ControllerBase
