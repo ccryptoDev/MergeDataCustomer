@@ -19,7 +19,7 @@ namespace MergeDataCustomer.Repositories.DtoModels.Responses
         public bool Visible { get; set; }
         public bool Drillable { get; set; }
 
-        public long StoreId { get; set; }
+        public long? StoreId { get; set; }
 
         [StringLength(7)] //Format: MM-YYYY
         public string Period { get; set; }
