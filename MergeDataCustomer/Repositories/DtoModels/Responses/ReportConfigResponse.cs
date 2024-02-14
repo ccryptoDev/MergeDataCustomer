@@ -11,7 +11,7 @@ namespace MergeDataCustomer.Repositories.DtoModels.Responses
         public string Style { get; set; }
         public string SummaryStyle { get; set; }
         public ReportType ReportType { get; set; }
-
+        public int ReportCategoryId { get; set; }
         public long? ClientId { get; set; }
 
 
@@ -27,7 +27,19 @@ namespace MergeDataCustomer.Repositories.DtoModels.Responses
         public bool PriorMonthEnabled { get; set; }
         public bool DrilldownEnabled { get; set; }
 
+        public long ViewId { get; set; }
+        public string? strWhere { get; set; }
+        public string? States { get; set; }
+        public string? MessageBoard { get; set; }
+
+        public string SourceOfReport { get; set; } //it can be the temporary php api, or our api
 
         public List<string> Columns { get; set; }
+        public int Order { get; set; }
+
+        public string? CreatedBy { get; set; }
+        public DateTime CreatedOn { get; set; }
+        public string? ModifiedBy { get; set; }
+        public DateTime ModifiedOn { get; set; }
     }
 }
