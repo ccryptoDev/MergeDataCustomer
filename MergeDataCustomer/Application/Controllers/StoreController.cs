@@ -5,6 +5,7 @@ using MergeDataCustomer.Repositories.DtoModels.Requests;
 using MergeDataImporter.Helpers.Generic;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MergeDataCustomer.Repositories.DtoModels.Responses.AgGrid;
 
 namespace MergeDataCustomer.Application.Controllers
 {
@@ -24,21 +25,51 @@ namespace MergeDataCustomer.Application.Controllers
         [Route("GetStores")]
         [Authorize(Policy = Permissions.User.View)]
         [HttpGet]
-        public async Task<IActionResult> GetStores(long clientId)
+        public async Task<IActionResult> GetStores(long clientId, bool agGridFormat=false)
         {
-            var auxResult = await _storeService.GetStores(clientId);
-            List<StoreResponse> result = auxResult.Data;
+            if(agGridFormat)
+            {
+                var auxResult = await _storeService.GetAllAgGrid(clientId);
+                AgGridObject result = auxResult.Data;
+
+                return Ok(result);
+            }
+            else
+            {
+                var auxResult = await _storeService.GetAll(clientId);
+                List<StoreResponse> result = auxResult.Data;
+
+                return Ok(result);
+            }
+        }
+
+        [Route("GetStore/{storeId}/{clientId}")]
+        [Authorize(Policy = Permissions.User.View)]
+        [HttpGet]
+        public async Task<IActionResult> GetStore(long storeId, long clientId)
+        {
+            var auxResult = await _storeService.Get(storeId, clientId);
+            StoreResponse result = auxResult.Data;
 
             return Ok(result);
         }
 
-        [Route("GetStoreGroups")]
+        [Route("GetStoreGroups/{clientId}")]
         [Authorize(Policy = Permissions.User.View)]
         [HttpGet]
         public async Task<IActionResult> GetStoreGroups(long clientId)
         {
             var auxResult = await _storeService.GetStoreGroups(clientId);
             List<StoreGroupResponse> result = auxResult.Data;
+
+            return Ok(result);
+        }
+
+        [Authorize(Policy = Permissions.User.Create)]
+        [HttpPost("CreateStore")]
+        public async Task<IActionResult> CreateStore(StoreCreationRequest request)
+        {
+            var result = await _storeService.AddAsync(request);
 
             return Ok(result);
         }
@@ -52,6 +83,24 @@ namespace MergeDataCustomer.Application.Controllers
             StoreGroupResponse result = auxResult.Data;
 
             return CreatedAtAction(nameof(GetStoreGroups), new { id = result.StoreGroupId }, result);
+        }
+
+        [Authorize(Policy = Permissions.User.Edit)]
+        [HttpPut("UpdateStore/{storeId}/{clientId}")]
+        public async Task<IActionResult> Update(long storeId, long clientId, StoreUpdateRequest request)
+        {
+            var result = await _storeService.UpdateAsync(storeId, clientId, request);
+
+            return Ok(result);
+        }
+
+        [Authorize(Policy = Permissions.User.Edit)]
+        [HttpPut("UpdateStoreStatus/{storeId}/{clientId}/{isActive}")]
+        public async Task<IActionResult> UpdateStoreStatus(long storeId, long clientId, bool isActive)
+        {
+            var result = await _storeService.ChangeStatusAsync(storeId, clientId, isActive);
+
+            return Ok(result);
         }
 
         [Route("DeleteStoreGroup/{id}")]
