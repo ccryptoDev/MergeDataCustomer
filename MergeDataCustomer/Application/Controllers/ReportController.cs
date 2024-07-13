@@ -9,6 +9,7 @@ using MergeDataImporter.Helpers.Generic;
 using MergeDataImporter.Repositories.Context;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Org.BouncyCastle.Utilities.Zlib;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -130,6 +131,17 @@ namespace MergeDataCustomer.Application.Controllers
                             normalizedData = _context.NormalizedSales.Where(x => x.ClientId == request.ClientId &&
                                                                                      request.StoreId.Contains(x.StoreId) &&
                                                                                      x.DealDate >= firstDay && x.DealDate <= lastDay)
+                                                                      .Select(x => new
+                                                                      {
+                                                                          DealNo = x.DealNo,
+                                                                          DateInventory= x.DateInventory,
+                                                                          DealDate = x.DealDate,
+                                                                          Condition = x.Condition,
+                                                                          SalesmanName = x.SalesmanName,
+                                                                          Price = x.Price   ,
+                                                                          HouseGross = x.HouseGross,
+                                                                          BackEndGross = x.BackEndGross
+                                                                      })
                                                                       .ToList();
 
                             break;
