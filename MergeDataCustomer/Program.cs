@@ -100,6 +100,7 @@ builder.Services.AddScoped<ReportService>();
 //own services
 builder.Services.AddScoped<StoreService>();
 builder.Services.AddScoped<GeneralService>();
+builder.Services.AddScoped<ClientService>();
 
 builder.Services.AddTransient<IMailService, SMTPMailService>();
 
