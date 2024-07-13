@@ -9,10 +9,12 @@ using MergeDataImporter.Helpers.Generic;
 using MergeDataImporter.Repositories.Context;
 using MergeDataImporter.Repositories.Contracts;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Office.Interop.Excel;
 using Newtonsoft.Json.Linq;
 using Org.BouncyCastle.Asn1.Ocsp;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace MergeDataCustomer.Application.Services
 {
@@ -203,7 +205,7 @@ namespace MergeDataCustomer.Application.Services
                     //INVENTORY REPORTS mostly
                     //INFO: this summary styles doesn't use LinesQty because it always returns 4 lines
 
-                    if (report.Name.ToLower().Contains("cit") || report.Name.ToLower().Contains("in transit"))  //PATCH for NADA: only for models report
+                    if (report.Name.ToLower().Contains("cit") || report.Name.ToLower().Contains("in transit")) //PATCH for NADA: only for CIT report
                     {
                         var currentDate = _context.Clients.FirstOrDefault(x => x.ClientId == clientId)?.LastUpdateDate;
 
@@ -231,7 +233,7 @@ namespace MergeDataCustomer.Application.Services
                                             NGL.""StoreId"" = NS.""StoreId"" AND
                                             TRIM(REPLACE(NS.""StockNumber"", '#', '')) = NGL.""Control1""
                                         WHERE
-                                            ""Glacct"" = '205' AND
+                                            ""Glacct"" in ('205','20500','20530','20535','20550','20555') AND
                                             NGL.""ClientId"" = {clientId} AND
                                             NGL.""StoreId"" IN ({storeId})
                                         GROUP BY
@@ -243,7 +245,7 @@ namespace MergeDataCustomer.Application.Services
                                     ""DaysRange""
                                 ORDER BY
                                     ""DaysRange""")
-                                                                      .ToList();
+                                .ToList();
 
                         List<ReportLineValue> rlvalues = new List<ReportLineValue>();
 
@@ -286,14 +288,17 @@ namespace MergeDataCustomer.Application.Services
 
                         var lastGeneratedPeriod = _context.ReportLineValues
                                                     .OrderBy(x => x.Period)
-                                                    .FirstOrDefault(rlv => rlv.ReportLine.ReportId == report.Id && rlv.StoreId == storeId)?
+                                                    .FirstOrDefault(rlv => rlv.ReportLine.ReportId == report.Id && rlv.StoreId == storeId && rlv.IsActive)?
                                                     .Period;
 
                         List<ReportLineValue> repLinesAuxAux = new List<ReportLineValue>();
 
                         if(lastGeneratedPeriod != null) //due to inventory data doesnt filter by date, we only look for the most up to date data of it
                             repLinesAuxAux = _context.ReportLineValues
-                                                    .Where(rlv => rlv.StoreId == storeId && rlv.Period == lastGeneratedPeriod && rlv.ReportLine.ReportId == report.Id)
+                                                    .Where(rlv => rlv.StoreId == storeId &&
+                                                                  rlv.Period == lastGeneratedPeriod &&
+                                                                  rlv.ReportLine.ReportId == report.Id &&
+                                                                  rlv.IsActive)
                                                     .ToList();
 
                         var columnsInv = targetColumns.Split(",");
@@ -354,10 +359,6 @@ namespace MergeDataCustomer.Application.Services
                     var columns = targetColumns.Split(",");
                     var titles = columnTitles.Split(",");
 
-                    var repLineVals = _context.ReportLineValues
-                        .Where(rlv => rlv.ReportLine.ReportId == report.Id && rlv.Period == period)
-                        .ToList();
-
                     reportSummary.ReportConfig.Columns = new List<string> { titles[0] };
                     if(titles.Length > 1)
                         reportSummary.ReportConfig.Columns = titles.ToList();
@@ -367,20 +368,19 @@ namespace MergeDataCustomer.Application.Services
 
                     if (report.ReportType == ReportType.Accounting)
                     {
-                        var keyReportLines = _context.ReportLines.Where(x => x.ReportId == report.Id && x.KeyLine).ToList();
+                        var keyReportLines = _context.ReportLines.Where(x => x.ReportId == report.Id && x.KeyLine).OrderBy(x => x.Order).ToList();
 
                         reportSummary.ReportConfig.Columns = keyReportLines.Select(x => x.Name).ToList();
 
                         var keyReportLineIds = keyReportLines.Select(x => x.Id).ToList();
 
-                        //if(period != null)
-                        rlvs = _context.ReportLineValues.Where(x => keyReportLineIds.Contains(x.ReportLineId) && x.StoreId == storeId && x.Period == period)
+                        rlvs = _context.ReportLineValues.Where(x => keyReportLineIds.Contains(x.ReportLineId) &&
+                                                                    x.StoreId == storeId && 
+                                                                    x.Period == period && 
+                                                                    x.IsActive)
+                                                        .OrderBy(x => x.ReportLine.Order)
                                                         .Take(keyReportLines.Count()) //Accounting type of report doesnt use LinesQty, it'll use the qty of keylines found
                                                         .ToList();
-                        //else
-                        //    rlvs = _context.ReportLineValues.Where(x => keyReportLineIds.Contains(x.ReportLineId))
-                        //                                    .Take(keyReportLines.Count())
-                        //                                    .ToList();
 
                         var periodConfig = GetPeriodParts(period);
                         var targetPeriodCompare = period;
@@ -396,7 +396,9 @@ namespace MergeDataCustomer.Application.Services
                                 //TODO: NOT IMPLEMENTED YET
                                 break;
                         }
-                        rlvsVariance = _context.ReportLineValues.Where(x => keyReportLineIds.Contains(x.ReportLineId) && x.Period == targetPeriodCompare)
+                        rlvsVariance = _context.ReportLineValues.Where(x => keyReportLineIds.Contains(x.ReportLineId) &&
+                                                                            x.Period == targetPeriodCompare &&
+                                                                            x.IsActive)
                                                     .Take(keyReportLines.Count())
                                                     .ToList();
 
@@ -411,7 +413,9 @@ namespace MergeDataCustomer.Application.Services
                             {
                                 case "count_non_empty":
                                     //INFO: this special calc mode doesn't use LinesQty because it always returns 1 line
-                                    var lineValues = _context.ReportLineValues.Where(x => x.ReportLineId == reportLine.Id && x.Period == period)
+                                    var lineValues = _context.ReportLineValues.Where(x => x.ReportLineId == reportLine.Id &&
+                                                                                          x.Period == period &&
+                                                                                          x.IsActive)
                                                                     .ToList();
 
                                     ReportLineValue newRlv = new ReportLineValue();
@@ -427,7 +431,9 @@ namespace MergeDataCustomer.Application.Services
 
                                     break;
                                 default:
-                                    rlvs = _context.ReportLineValues.Where(x => x.ReportLineId == reportLine.Id &&x.Period == period)
+                                    rlvs = _context.ReportLineValues.Where(x => x.ReportLineId == reportLine.Id &&
+                                                                                x.Period == period &&
+                                                                                x.IsActive)
                                                                     .Take(linesQty)
                                                                     .ToList();
 
@@ -543,178 +549,6 @@ namespace MergeDataCustomer.Application.Services
                             });
                             z++;
                         }
-                    }
-                    else if (report.ReportType == ReportType.Repeat && report.Name.ToLower().Contains("salesperson")) //PATCH for NADA: only for salesperson reports
-                    {
-                        string condition = "New";
-                        if (report.Description.ToLower().Contains("used"))
-                            condition = "Used";
-
-                        string order = "ASC";
-                        if(selectedOptions != null && selectedOptions.FirstOrDefault() == 2) //'Last 3' came selected
-                            order = "DESC";
-
-                        var periodParts = period.Split("-");
-                        var priorMonth = Convert.ToInt32(periodParts[1]) - 1;
-                        int zeroToSubtract = 0;
-                        if(priorMonth == 0)
-                        {
-                            priorMonth = 12;
-                            zeroToSubtract = 1;
-                        }
-
-                        var queryResult = _context.SalespersonSqlResponses.FromSqlRaw<SalespersonSqlResponse>($@"
-                                SELECT 
-                                    sub.""rankU"", sub.""rankS"", sub.""rankG"", sub.""empId"", 
-                                    COALESCE(NULLIF(sub.""Name"", ''), sub.""empId"" || ' - Missing') as ""Name"",
-                                    sub.""Deal"", sub.""pmDeal"", sub.""pyDeal"",
-                                    COALESCE(sub.""Deal"", 0) - COALESCE(sub.""pmDeal"", 0) AS ""DealPmT"",
-                                    sub.""Deal""::decimal / NULLIF(sub.""pmDeal"", 0) * 100 AS ""DealPmV"",
-                                    COALESCE(sub.""Deal"", 0) - COALESCE(sub.""pyDeal"", 0) AS ""DealPyT"",
-                                    sub.""Deal""::decimal / NULLIF(sub.""pyDeal"", 0) * 100 AS ""DealPyV"",
-                    
-                                    sub.""Sales"", sub.""pmSales"", sub.""pySales"",
-                                    COALESCE(sub.""Sales"", 0) - COALESCE(sub.""pmSales"", 0) AS ""SalesPmT"",
-                                    sub.""Sales""::decimal / NULLIF(sub.""pmSales"", 0) * 100 AS ""SalesPmV"",
-                                    COALESCE(sub.""Sales"", 0) - COALESCE(sub.""pySales"", 0) AS ""SalesPyT"",
-                                    sub.""Sales""::decimal / NULLIF(sub.""pySales"", 0) * 100 AS ""SalesPyV"",
-                    
-                                    sub.""Gross"", sub.""pmGross"", sub.""pyGross"",
-                                    COALESCE(sub.""Gross"", 0) - COALESCE(sub.""pmGross"", 0) AS ""GrossPmT"",
-                                    sub.""Gross""::decimal / NULLIF(sub.""pmGross"", 0) * 100 AS ""GrossPmV"",
-                                    COALESCE(sub.""Gross"", 0) - COALESCE(sub.""pyGross"", 0) AS ""GrossPyT"",
-                                    sub.""Gross""::decimal / NULLIF(sub.""pyGross"", 0) * 100 AS ""GrossPyV""
-                                FROM
-            	                    (
-                	                    Select
-					                    ""SalesmanNo"" as ""empId"", ""SalesmanName"" as ""Name"", 
-            
-                                        ROW_NUMBER() OVER (ORDER BY COUNT(""DealNo"") desc) AS ""rankU"",
-                                        ROW_NUMBER() OVER (ORDER BY SUM(""Price"") desc) AS ""rankS"",
-                                        ROW_NUMBER() OVER (ORDER BY SUM(""Price"" - ""Cost"") desc) AS ""rankG"",
-            
-                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
-                                                                (""DealNo"") end) as ""Deal"",
-                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
-                                                                (""DealNo"") end) as ""pmDeal"", 
-                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[0]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - 1} then
-                                                                (""DealNo"") end) as ""pyDeal"", 
-            
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
-                                                                (""Price"") end) as ""Sales"",
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
-                                                                (""Price"") end) as ""pmSales"", 
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0])-1} then
-                                                                (""Price"") end) as ""pySales"", 
-                                            
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
-                                                                (""HouseGross"" + ""BackEndGross"") end) as ""Gross"",
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
-                                                                (""HouseGross"" + ""BackEndGross"") end) as ""pmGross"", 
-                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
-                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - 1} then
-                                                                (""HouseGross"" + ""BackEndGross"") end) as ""pyGross""
-            
-                                            FROM normalized.""NormalizedSales"" NS
-                                            Where NS.""ClientId"" = {clientId} and NS.""StoreId"" = {storeId} and NS.""Condition"" = '{condition}'  
-                                            Group by ""SalesmanNo"", ""SalesmanName"" 
-                                    ) AS sub
-            
-            	                order by ""rankU"" {order} LIMIT {linesQty}")
-                            .ToList();
-
-                        List<ReportLineValue> rlvalues = new List<ReportLineValue>();
-
-                        switch (calcMode)
-                        {
-                            case "top_bottom":
-                                reportSummary.ReportConfig.Columns = new List<string> { $"Top {linesQty},Last {linesQty}", columnTitles };
-
-                                var selectedMetric = selectedOptions?.LastOrDefault();
-                                if (selectedMetric == null)
-                                    selectedMetric = 1;
-
-                                foreach (var row in queryResult)
-                                {
-                                    ReportLineValue newRlv = new ReportLineValue();
-                                    newRlv.Column1 = row.Name;
-
-                                    switch (titlesCS[selectedMetric.Value-1])
-                                    {
-                                        case "Units":
-                                            switch(target)
-                                            {
-                                                case TargetOption.PriorMonth:
-                                                    newRlv.Column2 = row.Deal?.ToString();
-                                                    newRlv.Column3 = row.DealPmV?.ToString();
-                                                    break;
-                                                case TargetOption.SameMonthLastYear:
-                                                    newRlv.Column2 = row.pyDeal?.ToString();
-                                                    newRlv.Column3 = row.DealPyV?.ToString();
-                                                    break;
-                                                case TargetOption.ThreeMonthsAverage:
-                                                    //TODO: NOT IMPLEMENTED YET
-                                                    break;
-                                            }
-                                            break;
-                                        case "Sales":
-                                            switch (target)
-                                            {
-                                                case TargetOption.PriorMonth:
-                                                    newRlv.Column2 = row.Sales?.ToString();
-                                                    newRlv.Column3 = row.SalesPmV?.ToString();
-                                                    break;
-                                                case TargetOption.SameMonthLastYear:
-                                                    newRlv.Column2 = row.pySales?.ToString();
-                                                    newRlv.Column3 = row.SalesPyV?.ToString();
-                                                    break;
-                                                case TargetOption.ThreeMonthsAverage:
-                                                    //TODO: NOT IMPLEMENTED YET
-                                                    break;
-                                            }
-                                            break;
-                                        case "Gross":
-                                            switch (target)
-                                            {
-                                                case TargetOption.PriorMonth:
-                                                    newRlv.Column2 = row.Gross?.ToString();
-                                                    newRlv.Column3 = row.GrossPmV?.ToString();
-                                                    break;
-                                                case TargetOption.SameMonthLastYear:
-                                                    newRlv.Column2 = row.pyGross?.ToString();
-                                                    newRlv.Column3 = row.GrossPyV?.ToString();
-                                                    break;
-                                                case TargetOption.ThreeMonthsAverage:
-                                                    //TODO: NOT IMPLEMENTED YET
-                                                    break;
-                                            }
-                                            break;
-                                    }
-
-                                    rlvalues.Add(newRlv);
-                                }
-
-                                reportSummary.ReportLines = new List<ReportLineResponse>();
-                                foreach (var rlv in rlvalues)
-                                {
-                                    List<string> values = new List<string>() { rlv.Column1, rlv.Column2, rlv.Column3 };
-
-                                    reportSummary.ReportLines.Add(new ReportLineResponse
-                                    {
-                                        Values = values
-                                    });
-                                }
-                                break;
-                        }
-
                     }
                     else if (report.ReportType == ReportType.Repeat && report.Name.ToLower().Contains("models"))  //PATCH for NADA: only for models report
                     {
@@ -978,17 +812,18 @@ namespace MergeDataCustomer.Application.Services
                         }
 
                         var definitiveGrossmtd = definitive.Grossmtd != 0 ? definitive.Grossmtd : 1;
+                        var definitiveUnitsmtd = definitive.Countmtd != 0 ? definitive.Countmtd : 1;
 
                         switch (target)
                         {
                             case TargetOption.PriorMonth:
-                                //decimal amountComparisonPm = (decimal)(definitive.AmountPm != 0 ? (definitive.AmountPm * 100 / definitiveGrossmtd - 100) : 100);
-                                decimal amountComparisonPm = (decimal)(definitive.AmountPm != 0 ? (definitive.AmountPm * 100 / definitiveGrossmtd) : 100);
+                            case TargetOption.ThreeMonthsAverage://TODO: NOT IMPLEMENTED YET, so it returns same as PM
+                                decimal unitsComparisonPm = (decimal)(definitive.CountPm != 0 ? (definitive.CountPm * 100 / definitiveUnitsmtd) : 100);
 
-                                if (amountComparisonPm > 0)
-                                    reportSummary.ReportConfig.Description = $"&arrow_up; {amountComparisonPm.ToString("#.##")}% Compared to ${definitive.AmountPm} prior month";
-                                else if (amountComparisonPm < 0)
-                                    reportSummary.ReportConfig.Description = $"&arrow_down; {amountComparisonPm.ToString("#.##")}% Compared to ${definitive.AmountPm} prior month";
+                                if (unitsComparisonPm > 0)
+                                    reportSummary.ReportConfig.Description = $"&arrow_up; {unitsComparisonPm.ToString()}% Compared to {definitive.CountPm} prior month";
+                                else if (unitsComparisonPm < 0)
+                                    reportSummary.ReportConfig.Description = $"&arrow_down; {unitsComparisonPm.ToString()}% Compared to {definitive.CountPm} prior month";
                                 else
                                     reportSummary.ReportConfig.Description = $"No variance compared to prior month";
 
@@ -996,7 +831,7 @@ namespace MergeDataCustomer.Application.Services
                                 {
                                     Column1 = "Units",
                                     Column2 = definitive.Countmtd.ToString(),
-                                    Column3 = definitive.CountPmV.ToString()
+                                    Column3 = (definitive.CountPmV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
@@ -1027,14 +862,14 @@ namespace MergeDataCustomer.Application.Services
                                 {
                                     Column1 = titlesCS[1], //Cars
                                     Column2 = cars.Countmtd.ToString(),
-                                    Column3 = cars.CountPmV.ToString()
+                                    Column3 = (cars.CountPmV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
                                 {
                                     Column1 = titlesCS[2], //Trucks
                                     Column2 = trucks.Countmtd.ToString(),
-                                    Column3 = trucks.CountPmV.ToString()
+                                    Column3 = (trucks.CountPmV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
@@ -1045,13 +880,12 @@ namespace MergeDataCustomer.Application.Services
 
                                 break;
                             case TargetOption.SameMonthLastYear:
-                                //decimal amountComparisonPy = (decimal)(definitive.AmountPy != 0 ? (definitive.AmountPy * 100 / definitiveGrossmtd - 100) : 100);
-                                decimal amountComparisonPy = (decimal)(definitive.AmountPy != 0 ? (definitive.AmountPy * 100 / definitiveGrossmtd) : 100);
+                                decimal unitsComparisonPy = (decimal)(definitive.CountPy != 0 ? (definitive.CountPy * 100 / definitiveUnitsmtd) : 100);
 
-                                if (amountComparisonPy > 0)
-                                    reportSummary.ReportConfig.Description = $"&arrow_up; {amountComparisonPy.ToString("#.##")}% Compared to ${definitive.AmountPy} last year";
-                                else if (amountComparisonPy < 0)
-                                    reportSummary.ReportConfig.Description = $"&arrow_down; {amountComparisonPy.ToString("#.##")}% Compared to ${definitive.AmountPy} last year";
+                                if (unitsComparisonPy > 0)
+                                    reportSummary.ReportConfig.Description = $"&arrow_up; {unitsComparisonPy.ToString()}% Compared to {definitive.CountPy} last year";
+                                else if (unitsComparisonPy < 0)
+                                    reportSummary.ReportConfig.Description = $"&arrow_down; {unitsComparisonPy.ToString()}% Compared to {definitive.CountPy} last year";
                                 else
                                     reportSummary.ReportConfig.Description = $"No variance compared to same month last year";
 
@@ -1059,7 +893,7 @@ namespace MergeDataCustomer.Application.Services
                                 {
                                     Column1 = "Units",
                                     Column2 = definitive.Countmtd.ToString(),
-                                    Column3 = definitive.CountPyV.ToString()
+                                    Column3 = (definitive.CountPyV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
@@ -1082,14 +916,14 @@ namespace MergeDataCustomer.Application.Services
                                 {
                                     Column1 = titlesCS[1], //Cars
                                     Column2 = queryResult[0].Countmtd.ToString(),
-                                    Column3 = queryResult[0].CountPyV.ToString()
+                                    Column3 = (queryResult[0].CountPyV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
                                 {
                                     Column1 = titlesCS[2], //Trucks
                                     Column2 = queryResult[1].Countmtd.ToString(),
-                                    Column3 = queryResult[1].CountPyV.ToString()
+                                    Column3 = (queryResult[1].CountPyV * 100).ToString()
                                 });
 
                                 rlvalues.Add(new ReportLineValue()
@@ -1099,9 +933,6 @@ namespace MergeDataCustomer.Application.Services
                                     Column3 = ""
                                 });
 
-                                break;
-                            case TargetOption.ThreeMonthsAverage:
-                                //TODO: NOT IMPLEMENTED YET
                                 break;
                         }
                         
@@ -1225,12 +1056,276 @@ namespace MergeDataCustomer.Application.Services
                     }
 
                     break;
+                case "persons_list":
+                    var columnsPL = targetColumns.Split(",");
+                    var titlesPL = columnTitles.Split(",");
+
+                    var rl_repLineVals = _context.ReportLineValues
+                        .Where(rlv => rlv.ReportLine.ReportId == report.Id && rlv.Period == period)
+                        .ToList();
+
+                    reportSummary.ReportConfig.Columns = new List<string> { titlesPL[0] };
+                    if (titlesPL.Length > 1)
+                        reportSummary.ReportConfig.Columns = titlesPL.ToList();
+
+                    List<ReportLineValue> pl_rlvs = new List<ReportLineValue>();
+                    List<ReportLineValue> pl_rlvsVariance = new List<ReportLineValue>();
+
+                    if (report.ReportType == ReportType.Repeat && report.Name.ToLower().Contains("f&i manager"))
+                    {
+                        var reportLine = _context.ReportLines.FirstOrDefault(rl => rl.ReportId == report.Id);
+
+                        if (reportLine != null)
+                        {
+                            pl_rlvs = _context.ReportLineValues.Where(x => x.ReportLineId == reportLine.Id &&
+                                                                           x.Period == period &&
+                                                                           x.StoreId == storeId &&
+                                                                           x.IsActive)
+                                                                    .Take(linesQty)
+                                                                    .ToList();
+
+                            reportSummary.ReportConfig.Columns = new List<string>();
+                        }
+
+                        reportSummary.ReportLines = new List<ReportLineResponse>();
+                        foreach (var rlv in pl_rlvs)
+                        {
+                            List<string> values = new List<string>();
+                            foreach (var x in columnsPL)
+                            {
+                                if (x == columnsPL.First()) //first loop: adding name initials
+                                {
+                                    string name = rlv.GetType().GetProperty($"Column{x}").GetValue(rlv, null)?.ToString();
+                                    if (!string.IsNullOrEmpty(name) && !name.Contains("Not Available"))
+                                    {
+                                        string[] words = name.Split(' ');
+                                        string initials = "";
+
+                                        foreach (string word in words)
+                                        {
+                                            if (!string.IsNullOrEmpty(word))
+                                                initials += word[0];
+                                        }
+
+                                        values.Add(initials);
+                                    }
+                                    else if(!string.IsNullOrEmpty(name) && name.Contains("Not Available"))
+                                        values.Add("-");
+                                    else
+                                        values.Add("");
+                                }
+
+                                var rlvVal = rlv.GetType().GetProperty($"Column{x}").GetValue(rlv, null)?.ToString();
+                                values.Add(rlvVal ?? "");
+                            }
+
+                            reportSummary.ReportLines.Add(new ReportLineResponse { Values = values });
+                        }
+                    }
+                    else if (report.ReportType == ReportType.Repeat && report.Name.ToLower().Contains("salesperson")) //PATCH for NADA: only for salesperson reports
+                    {
+                        string condition = "New";
+                        if (report.Description.ToLower().Contains("used"))
+                            condition = "Used";
+
+                        string order = "ASC";
+                        if (selectedOptions != null && selectedOptions.FirstOrDefault() == 2) //'Last 3' came selected
+                            order = "DESC";
+
+                        var periodParts = period.Split("-");
+                        var priorMonth = Convert.ToInt32(periodParts[1]) - 1;
+                        int zeroToSubtract = 0;
+                        if (priorMonth == 0)
+                        {
+                            priorMonth = 12;
+                            zeroToSubtract = 1;
+                        }
+
+                        var queryResult = _context.SalespersonSqlResponses.FromSqlRaw<SalespersonSqlResponse>($@"
+                                SELECT 
+                                    sub.""rankU"", sub.""rankS"", sub.""rankG"", sub.""empId"", 
+                                    COALESCE(NULLIF(sub.""Name"", ''), sub.""empId"" || ' - Missing') as ""Name"",
+                                    sub.""Deal"", sub.""pmDeal"", sub.""pyDeal"",
+                                    COALESCE(sub.""Deal"", 0) - COALESCE(sub.""pmDeal"", 0) AS ""DealPmT"",
+                                    sub.""Deal""::decimal / NULLIF(sub.""pmDeal"", 0) * 100 AS ""DealPmV"",
+                                    COALESCE(sub.""Deal"", 0) - COALESCE(sub.""pyDeal"", 0) AS ""DealPyT"",
+                                    sub.""Deal""::decimal / NULLIF(sub.""pyDeal"", 0) * 100 AS ""DealPyV"",
+                    
+                                    sub.""Sales"", sub.""pmSales"", sub.""pySales"",
+                                    COALESCE(sub.""Sales"", 0) - COALESCE(sub.""pmSales"", 0) AS ""SalesPmT"",
+                                    sub.""Sales""::decimal / NULLIF(sub.""pmSales"", 0) * 100 AS ""SalesPmV"",
+                                    COALESCE(sub.""Sales"", 0) - COALESCE(sub.""pySales"", 0) AS ""SalesPyT"",
+                                    sub.""Sales""::decimal / NULLIF(sub.""pySales"", 0) * 100 AS ""SalesPyV"",
+                    
+                                    sub.""Gross"", sub.""pmGross"", sub.""pyGross"",
+                                    COALESCE(sub.""Gross"", 0) - COALESCE(sub.""pmGross"", 0) AS ""GrossPmT"",
+                                    sub.""Gross""::decimal / NULLIF(sub.""pmGross"", 0) * 100 AS ""GrossPmV"",
+                                    COALESCE(sub.""Gross"", 0) - COALESCE(sub.""pyGross"", 0) AS ""GrossPyT"",
+                                    sub.""Gross""::decimal / NULLIF(sub.""pyGross"", 0) * 100 AS ""GrossPyV""
+                                FROM
+            	                    (
+                	                    Select
+					                    ""SalesmanNo"" as ""empId"", ""SalesmanName"" as ""Name"", 
+            
+                                        ROW_NUMBER() OVER (ORDER BY COUNT(""DealNo"") desc) AS ""rankU"",
+                                        ROW_NUMBER() OVER (ORDER BY SUM(""Price"") desc) AS ""rankS"",
+                                        ROW_NUMBER() OVER (ORDER BY SUM(""Price"" - ""Cost"") desc) AS ""rankG"",
+            
+                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
+                                                                (""DealNo"") end) as ""Deal"",
+                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
+                                                                (""DealNo"") end) as ""pmDeal"", 
+                                        Count (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[0]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - 1} then
+                                                                (""DealNo"") end) as ""pyDeal"", 
+            
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
+                                                                (""Price"") end) as ""Sales"",
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
+                                                                (""Price"") end) as ""pmSales"", 
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - 1} then
+                                                                (""Price"") end) as ""pySales"", 
+                                            
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {periodParts[0]} then
+                                                                (""HouseGross"" + ""BackEndGross"") end) as ""Gross"",
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {priorMonth}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - zeroToSubtract} then
+                                                                (""HouseGross"" + ""BackEndGross"") end) as ""pmGross"", 
+                                        Sum (Case when EXTRACT(MONTH FROM NS.""DealDate"") = {periodParts[1]}  
+                                                                and EXTRACT(YEAR FROM NS.""DealDate"") = {Convert.ToInt32(periodParts[0]) - 1} then
+                                                                (""HouseGross"" + ""BackEndGross"") end) as ""pyGross""
+            
+                                            FROM normalized.""NormalizedSales"" NS
+                                            Where NS.""ClientId"" = {clientId} and NS.""StoreId"" = {storeId} and NS.""Condition"" = '{condition}'  
+                                            Group by ""SalesmanNo"", ""SalesmanName"" 
+                                    ) AS sub
+            
+            	                order by ""rankU"" {order} LIMIT {linesQty}")
+                            .ToList();
+
+                        List<ReportLineValue> rlvalues = new List<ReportLineValue>();
+
+                        switch (calcMode)
+                        {
+                            case "top_bottom":
+                                reportSummary.ReportConfig.Columns = new List<string> { $"Top {linesQty},Last {linesQty}", columnTitles };
+
+                                var selectedMetric = selectedOptions?.LastOrDefault();
+                                if (selectedMetric == null)
+                                    selectedMetric = 1;
+
+                                foreach (var row in queryResult)
+                                {
+                                    ReportLineValue newRlv = new ReportLineValue();
+
+                                    if (!string.IsNullOrEmpty(row.Name) && !row.Name.Contains("Not Available"))
+                                    {
+                                        string[] words = row.Name.Split(' ');
+                                        string initials = "";
+
+                                        foreach (string word in words)
+                                        {
+                                            if (!string.IsNullOrEmpty(word))
+                                                initials += word[0];
+                                        }
+
+                                        newRlv.Column1 = initials;
+                                    }
+                                    else if (!string.IsNullOrEmpty(row.Name) && row.Name.Contains("Not Available"))
+                                        newRlv.Column1 = "-";
+                                    else
+                                        newRlv.Column1 = "";
+
+                                    newRlv.Column2 = row.Name;
+
+                                    switch (titlesPL[selectedMetric.Value - 1])
+                                    {
+                                        case "Units":
+                                            switch (target)
+                                            {
+                                                case TargetOption.PriorMonth:
+                                                    newRlv.Column3 = row.Deal?.ToString();
+                                                    newRlv.Column4 = row.DealPmV?.ToString();
+                                                    break;
+                                                case TargetOption.SameMonthLastYear:
+                                                    newRlv.Column3 = row.pyDeal?.ToString();
+                                                    newRlv.Column4 = row.DealPyV?.ToString();
+                                                    break;
+                                                case TargetOption.ThreeMonthsAverage:
+                                                    //TODO: NOT IMPLEMENTED YET. showing PM by default
+                                                    newRlv.Column3 = row.Deal?.ToString();
+                                                    newRlv.Column4 = row.DealPmV?.ToString();
+                                                    break;
+                                            }
+                                            break;
+                                        case "Sales":
+                                            switch (target)
+                                            {
+                                                case TargetOption.PriorMonth:
+                                                    newRlv.Column3 = row.Sales?.ToString();
+                                                    newRlv.Column4 = row.SalesPmV?.ToString();
+                                                    break;
+                                                case TargetOption.SameMonthLastYear:
+                                                    newRlv.Column3 = row.pySales?.ToString();
+                                                    newRlv.Column4 = row.SalesPyV?.ToString();
+                                                    break;
+                                                case TargetOption.ThreeMonthsAverage:
+                                                    //TODO: NOT IMPLEMENTED YET. showing PM by default
+                                                    newRlv.Column3 = row.Sales?.ToString();
+                                                    newRlv.Column4 = row.SalesPmV?.ToString();
+                                                    break;
+                                            }
+                                            break;
+                                        case "Gross":
+                                            switch (target)
+                                            {
+                                                case TargetOption.PriorMonth:
+                                                    newRlv.Column3 = row.Gross?.ToString();
+                                                    newRlv.Column4 = row.GrossPmV?.ToString();
+                                                    break;
+                                                case TargetOption.SameMonthLastYear:
+                                                    newRlv.Column3 = row.pyGross?.ToString();
+                                                    newRlv.Column4 = row.GrossPyV?.ToString();
+                                                    break;
+                                                case TargetOption.ThreeMonthsAverage:
+                                                    //TODO: NOT IMPLEMENTED YET. showing PM by default
+                                                    newRlv.Column3 = row.Gross?.ToString();
+                                                    newRlv.Column4 = row.GrossPmV?.ToString();
+                                                    break;
+                                            }
+                                            break;
+                                    }
+
+                                    rlvalues.Add(newRlv);
+                                }
+
+                                reportSummary.ReportLines = new List<ReportLineResponse>();
+                                foreach (var rlv in rlvalues)
+                                {
+                                    List<string> values = new List<string>() { rlv.Column1, rlv.Column2, rlv.Column3, rlv.Column4 };
+
+                                    reportSummary.ReportLines.Add(new ReportLineResponse
+                                    {
+                                        Values = values
+                                    });
+                                }
+                                break;
+                        }
+
+                    }
+
+                    //order by amount of sales
+                    reportSummary.ReportLines = reportSummary.ReportLines.OrderByDescending(x => Convert.ToDouble(x.Values[2]?.Replace("$", ""))).ToList();
+
+                    break;
                 case "graphic_selectable":
-                    var columnsGS = targetColumns.Split(",");
-                    var titlesGS = columnTitles.Split(",");
-
                     //TODO: implement grapihc summary type for Models summary
-
 
                     break;
                 case "card":
